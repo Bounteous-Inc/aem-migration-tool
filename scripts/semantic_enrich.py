@@ -91,38 +91,20 @@ def main():
     if df.empty:
         print('No HTML rows found after filtering.')
         sys.exit(1)
-    # Feature extraction (parallelized HTML fetch)
-    urls = df['Address'].tolist()
-    htmls = [''] * len(urls)
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_idx = {executor.submit(fetch_html, url): i for i, url in enumerate(urls)}
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            try:
-                htmls[idx] = future.result()
-            except Exception:
-                htmls[idx] = ''
-    # Feature extraction (parallelized OpenAI calls)
-    def extract_all_features(args):
-        html, url = args
-        return extract_features(html, url)
-    features = [None] * len(urls)
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_idx = {executor.submit(extract_all_features, (htmls[i], urls[i])): i for i in range(len(urls))}
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            try:
-                features[idx] = future.result()
-            except Exception:
-                features[idx] = ('', '', '', '', '')
-    titles, metas, main_texts, url_structs, topic_labels = zip(*features)
-    df['Page Title'] = titles
-    df['Meta Description'] = metas
-    df['Main Text'] = main_texts
-    df['URL Structure'] = url_structs
-    df['Topic Label'] = topic_labels
-    # Prepare text for embedding
-    texts = [preprocess_text(t, m, mt, us, tl) for t, m, mt, us, tl in zip(titles, metas, main_texts, url_structs, topic_labels)]
+    # Use only existing metadata for grouping
+    # Extract first two path segments for grouping
+    def get_url_struct(url):
+        parsed = urlparse(url)
+        segments = [seg for seg in parsed.path.split('/') if seg]
+        return '/'.join(segments[:2]) if segments else ''
+    df['URL Structure'] = df['Address'].apply(get_url_struct)
+    # Use available columns for grouping features
+    titles = df['Page Title'] if 'Page Title' in df.columns else [''] * len(df)
+    metas = df['Meta Description'] if 'Meta Description' in df.columns else [''] * len(df)
+    main_texts = df['Main Text'] if 'Main Text' in df.columns else [''] * len(df)
+    url_structs = df['URL Structure']
+    # Prepare text for embedding (skip OpenAI topic label)
+    texts = [preprocess_text(t, m, mt, us) for t, m, mt, us in zip(titles, metas, main_texts, url_structs)]
     # Embedding (parallelized)
     def embed_text(text):
         return get_embedding(text, model="text-embedding-3-large")
